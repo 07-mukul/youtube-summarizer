@@ -8,6 +8,7 @@ import re
 from dotenv import load_dotenv
 from urllib.parse import urlparse, parse_qs
 import time
+import requests
 
 load_dotenv()
 
@@ -173,28 +174,38 @@ def youtube_summarizer():
     }), 200
 
 
-# def get_transcript(video_id):
-#     username = os.getenv("WEBSHARE_USERNAME")
-#     password = os.getenv("WEBSHARE_PASSWORD")
-#     # Use Webshare Proxy
-#     try:
-#         proxy_config = WebshareProxyConfig(proxy_username=username, proxy_password=password)
-#         ytt_api = YouTubeTranscriptApi(proxy_config=proxy_config)
-#         transcript_response = ytt_api.fetch(video_id)
-#         return ' '.join([snippet.text for snippet in transcript_response])
-#     except Exception as e:
-#         print(f"Proxy connection failed: {e}")
-#         raise e
-
 def get_transcript(video_id):
-    """Fetch transcript with minimal retry logic"""
-    max_retries = 2  # Reduced from 3 to 2
-    base_delay = 1  # Reduced from 2 to 1 second
+    """Fetch transcript using Webshare proxy to avoid YouTube IP blocking"""
+    
+    # Build proxy URL from environment variables
+    proxy_host = os.getenv("WEBSHARE_PROXY_HOST")
+    proxy_port = os.getenv("WEBSHARE_PROXY_PORT")
+    proxy_username = os.getenv("WEBSHARE_PROXY_USERNAME")
+    proxy_password = os.getenv("WEBSHARE_PROXY_PASSWORD")
+    
+    # Construct proxy URL: http://username:password@host:port
+    proxy_url = f"http://{proxy_username}:{proxy_password}@{proxy_host}:{proxy_port}"
+    proxies = {
+        'http': proxy_url,
+        'https': proxy_url,
+    }
+    
+    max_retries = 2
+    base_delay = 1
     
     for attempt in range(max_retries):
         try:
-            # Create YouTubeTranscriptApi instance
-            yt_api = YouTubeTranscriptApi()
+            print(f"Attempt {attempt + 1}/{max_retries} - Using Webshare proxy {proxy_host}:{proxy_port}")
+            
+            # Create requests session with proxy configuration
+            session = requests.Session()
+            session.proxies.update(proxies)
+            session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            
+            # Create YouTubeTranscriptApi instance and pass session with proxy
+            yt_api = YouTubeTranscriptApi(http_client=session)
             
             # List all available transcripts
             transcript_list = yt_api.list(video_id)
@@ -216,7 +227,7 @@ def get_transcript(video_id):
                 try:
                     transcript_response = yt_api.fetch(video_id, languages=['en'])
                     language_used = '🇬🇧 English'
-                    print(f"Using English transcript")
+                    print(f"✅ Using English transcript")
                 except Exception as e:
                     print(f"Failed to fetch English: {e}")
             
@@ -225,7 +236,7 @@ def get_transcript(video_id):
                 try:
                     transcript_response = yt_api.fetch(video_id, languages=['hi'])
                     language_used = '🇮🇳 Hindi'
-                    print(f"Using Hindi transcript")
+                    print(f"✅ Using Hindi transcript")
                 except Exception as e:
                     print(f"Failed to fetch Hindi: {e}")
             
@@ -235,7 +246,7 @@ def get_transcript(video_id):
                     first_lang = available_langs[0]
                     transcript_response = yt_api.fetch(video_id, languages=[first_lang])
                     language_used = f'Language: {first_lang}'
-                    print(f"Using {first_lang} transcript")
+                    print(f"✅ Using {first_lang} transcript")
                 except Exception as e:
                     print(f"Failed to fetch {first_lang}: {e}")
             
@@ -244,6 +255,8 @@ def get_transcript(video_id):
             
             # Extract text from FetchedTranscriptSnippet objects
             transcript_text = ' '.join([snippet.text for snippet in transcript_response])
+            
+            print(f"✅ Successfully fetched transcript with {len(transcript_text)} characters")
             
             # Success! Return the transcript
             return {
@@ -256,21 +269,19 @@ def get_transcript(video_id):
             print(f"Invalid video ID: {e}")
             raise e
         except IpBlocked as e:
-            print(f"Attempt {attempt + 1}/{max_retries} - IP Blocked by YouTube: {e}")
+            print(f"Attempt {attempt + 1}/{max_retries} - IP/Proxy Blocked by YouTube: {e}")
             if attempt < max_retries - 1:
-                # Exponential backoff: 2s, 4s, 8s
                 delay = base_delay * (2 ** attempt)
                 print(f"Retrying in {delay} seconds...")
                 time.sleep(delay)
             else:
-                raise Exception("YouTube is blocking your IP. Please wait 15-30 minutes and try again, or use a different VPN server.")
+                raise Exception("Proxy is blocked. YouTube is blocking requests. Please wait 15-30 minutes and try again.")
         except TranscriptsDisabled as e:
             print(f"Transcripts disabled: {e}")
             raise Exception("This video does not have transcripts available.")
         except Exception as e:
             print(f"Attempt {attempt + 1}/{max_retries} - Transcript fetch failed: {e}")
             if attempt < max_retries - 1:
-                # Exponential backoff
                 delay = base_delay * (2 ** attempt)
                 print(f"Retrying in {delay} seconds...")
                 time.sleep(delay)
@@ -278,8 +289,17 @@ def get_transcript(video_id):
                 raise e
 
 def generate_summary(transcript, language='English'):
-    # Use the best working model (with request timeout)
-    model_name = "gemini-2.0-flash"  # Most reliable and fastest
+    # Get all available API keys from environment
+    api_keys = [
+        os.getenv("GEMINI_API_KEY"),
+        os.getenv("GEMINI_API_KEY_2"),
+        os.getenv("GEMINI_API_KEY_3")
+    ]
+    
+    # Filter out None values
+    api_keys = [key for key in api_keys if key]
+    
+    model_name = "gemini-2.0-flash"
     
     # Adjust prompt based on language
     if 'Hindi' in language:
@@ -287,16 +307,36 @@ def generate_summary(transcript, language='English'):
     else:
         prompt = f"You have to summarize a YouTube video using its transcript in 10 points. Transcript: {transcript}"
     
-    try:
-        print(f"Generating summary with model: {model_name}")
-        model = genai.GenerativeModel(model_name)
-        # Set timeout to 60 seconds to prevent infinite hanging
-        response = model.generate_content(prompt, request_options={"timeout": 60})
-        print(f"✅ Summary generated successfully")
-        return response.text
-    except Exception as e:
-        print(f"❌ Summary generation failed: {type(e).__name__}: {e}")
-        raise Exception(f"Unable to generate summary: {str(e)}")
+    # Try each API key
+    last_error = None
+    for key_index, api_key in enumerate(api_keys, 1):
+        try:
+            print(f"🔑 Attempting with API Key {key_index}/{len(api_keys)}")
+            genai.configure(api_key=api_key)
+            
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt, request_options={"timeout": 60})
+            print(f"✅ Summary generated successfully with Key {key_index}")
+            return response.text
+            
+        except Exception as e:
+            error_msg = str(e)
+            last_error = e
+            print(f"❌ Key {key_index} failed: {type(e).__name__}")
+            
+            # Check if it's a quota error
+            if "quota" in error_msg.lower() or "429" in error_msg:
+                print(f"⚠️  Quota exceeded for Key {key_index}, trying next key...")
+                if key_index < len(api_keys):
+                    continue
+                else:
+                    break
+            else:
+                # Other errors are not quota-related, re-raise
+                raise Exception(f"Unable to generate summary: {error_msg}")
+    
+    # All keys exhausted
+    raise Exception(f"Unable to generate summary: All {len(api_keys)} API keys quota exceeded. Please try again in a few moments.")
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

@@ -427,7 +427,20 @@
                 
                 if (data.error) {
                     const errorMsg = data.data || 'Unknown error occurred';
-                    if (data.error_type === 'rate_limit') {
+                    
+                    // Show helpful solutions for IP blocking
+                    if (data.error_type === 'ip_blocking') {
+                        let solutionsText = `${errorMsg}\n\n🔧 Quick Solutions:\n`;
+                        if (data.solutions && Array.isArray(data.solutions)) {
+                            data.solutions.forEach((sol, idx) => {
+                                solutionsText += `${idx + 1}. ${sol}\n`;
+                            });
+                        }
+                        showStatus(`⚠️ ${solutionsText}`, 'error');
+                        // Also update the textarea with suggestions
+                        document.getElementById('summary').value = solutionsText;
+                        document.getElementById('resultSection').style.display = 'block';
+                    } else if (data.error_type === 'rate_limit') {
                         showStatus(`⏱️ ${errorMsg}`, 'error');
                     } else {
                         showStatus(`❌ ${errorMsg}`, 'error');
