@@ -11,6 +11,7 @@ from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 import time
 import requests
+import http.cookiejar
 
 try:
     import grpc
@@ -226,14 +227,14 @@ def youtube_summarizer():
         # Handle specific YouTube errors
         if "blocking" in error_msg.lower() or "ip blocked" in error_msg.lower():
             return jsonify({
-                "data": "YouTube is blocking your IP due to too many requests. Solutions: 1) Wait 15-30 minutes, 2) Switch VPN server, 3) Try a different video. Cached results will be available immediately.",
+                "data": "YouTube is blocking your IP due to too many requests. On Render, datacenter IPs are often blocked. Solution: Export YouTube cookies using a 'Get cookies.txt LOCALLY' browser extension, and add the contents to a 'YOUTUBE_COOKIES' environment variable in your Render dashboard.",
                 "error": True,
                 "error_type": "ip_blocking",
                 "solutions": [
-                    "Wait 15-30 minutes for YouTube to unblock your IP",
-                    "Switch to a different VPN server",
-                    "Try summarizing a different video",
-                    "Ensure VPN is properly connected"
+                    "Add a YOUTUBE_COOKIES environment variable in Render containing your Netscape cookies",
+                    "Export YouTube cookies and save as 'cookies.txt' in the project directory",
+                    "Use Webshare proxy (configure WEBSHARE_PROXY_HOST, _PORT, _USERNAME, _PASSWORD env vars)",
+                    "Wait 15-30 minutes for YouTube to unblock your IP"
                 ]
             }), 429
         elif "no transcripts" in error_msg.lower() or "transcripts disabled" in error_msg.lower():
@@ -272,9 +273,32 @@ def youtube_summarizer():
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 
+def _load_cookies(session):
+    """Load cookies from cookies.txt (Netscape format) if it exists, or from YOUTUBE_COOKIES environment variable."""
+    cookies_path = _BASE_DIR / "cookies.txt"
+    
+    env_cookies = os.getenv("YOUTUBE_COOKIES")
+    if env_cookies:
+        try:
+            with open(cookies_path, "w", encoding="utf-8") as f:
+                f.write(env_cookies)
+            print("[cookies] Wrote YOUTUBE_COOKIES env var to cookies.txt")
+        except Exception as e:
+            print(f"[cookies] Failed to write env var to cookies.txt: {e}")
+
+    if cookies_path.exists():
+        try:
+            cj = http.cookiejar.MozillaCookieJar(cookies_path)
+            cj.load(ignore_discard=True, ignore_expires=True)
+            session.cookies.update(cj)
+            print(f"[cookies] Loaded {len(cj)} cookies from cookies.txt")
+        except Exception as e:
+            print(f"[cookies] Warning: failed to load cookies.txt: {e}")
+
 def _direct_http_session():
     s = requests.Session()
     s.headers.update({"User-Agent": UA})
+    _load_cookies(s)
     return s
 
 
@@ -290,6 +314,7 @@ def _proxy_http_session():
     s = requests.Session()
     s.proxies.update({"http": proxy_url, "https": proxy_url})
     s.headers.update({"User-Agent": UA})
+    _load_cookies(s)
     return s
 
 
