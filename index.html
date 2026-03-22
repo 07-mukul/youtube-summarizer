@@ -302,9 +302,7 @@
     </div>
     
     <script>
-        const API_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-            ? 'http://localhost:5000'
-            : 'https://youtube-summarizer-r5ot.onrender.com';
+        const API_URL = '';
         let timerInterval = null;
         let elapsedSeconds = 0;
         
@@ -393,7 +391,7 @@
         
         async function getAPI() {
             try {
-                const response = await fetch(`${API_URL}/`);
+                const response = await fetch(`${API_URL}/api`);
                 const data = await response.json();
                 let message = `API Status: ${data.status}\n\nEndpoints:\n`;
                 for (const [key, value] of Object.entries(data.endpoints)) {

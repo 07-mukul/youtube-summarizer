@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 import google.generativeai as genai
 from google.api_core import exceptions as google_api_exceptions
 from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, InvalidVideoId
@@ -90,10 +90,15 @@ def _looks_like_gemini_rate_limit(error_msg: str) -> bool:
 
 @app.route('/', methods=['GET'])
 def home():
+    return send_from_directory(_BASE_DIR, 'index.html')
+
+@app.route('/api', methods=['GET'])
+def api_info():
     return jsonify({
         "status": "API is running",
         "endpoints": {
-            "GET /": "This message",
+            "GET /": "Serves Frontend",
+            "GET /api": "This message",
             "GET /health": "Health check",
             "GET /summary?url=YOUTUBE_URL": "Summarize YouTube video from URL"
         }
