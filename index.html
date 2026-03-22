@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Video Summarizer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        
+        .input-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
+        }
+        
+        input[type="text"],
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color 0.3s;
+        }
+        
+        input[type="text"]:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        button {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        .button-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .status {
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+            display: block;
+        }
+        
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+            display: block;
+        }
+        
+        .status.loading {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+            display: block;
+        }
+        
+        /* Loading Spinner */
+        .loader-container {
+            display: none;
+            text-align: center;
+            padding: 30px;
+            margin: 20px 0;
+        }
+        
+        .loader-container.active {
+            display: block;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .loader-text {
+            color: #667eea;
+            font-weight: 600;
+            margin-bottom: 12px;
+            font-size: 16px;
+        }
+        
+        .timer {
+            font-size: 24px;
+            color: #764ba2;
+            font-weight: bold;
+            margin: 10px 0;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .steps {
+            margin-top: 20px;
+            text-align: left;
+            background: #f8f9ff;
+            padding: 15px;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        .step {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+            color: #666;
+        }
+        
+        .step.active {
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .step.completed {
+            color: #28a745;
+        }
+        
+        .step-icon {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #ddd;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 10px;
+            font-size: 12px;
+            color: white;
+        }
+        
+        .step.active .step-icon {
+            background: #667eea;
+            animation: pulse 1.5s infinite;
+        }
+        
+        .step.completed .step-icon {
+            background: #28a745;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        button:disabled:hover {
+            transform: none;
+            box-shadow: none;
+        }
+        
+        .result-section {
+            margin-top: 30px;
+        }
+        
+        .result-section h2 {
+            color: #333;
+            font-size: 18px;
+            margin-bottom: 15px;
+        }
+        
+        textarea {
+            min-height: 200px;
+            resize: vertical;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 YouTube Video Summarizer</h1>
+        <p class="subtitle">Get AI-powered summaries of YouTube videos</p>
+        
+        <div class="button-group">
+            <button onclick="checkHealth()">Health Check</button>
+            <button onclick="getAPI()">View API Info</button>
+        </div>
+        
+        <div id="status" class="status"></div>
+        
+        <!-- Loading Indicator -->
+        <div id="loaderContainer" class="loader-container">
+            <div class="spinner"></div>
+            <div class="loader-text">Processing Video...</div>
+            <div class="timer" id="timer">0s</div>
+            <div class="steps">
+                <div class="step active" id="step1">
+                    <div class="step-icon">1</div>
+                    <span>Extracting video ID</span>
+                </div>
+                <div class="step" id="step2">
+                    <div class="step-icon">2</div>
+                    <span>Fetching transcript</span>
+                </div>
+                <div class="step" id="step3">
+                    <div class="step-icon">3</div>
+                    <span>Generating summary with AI</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="input-group">
+            <label for="youtubeUrl">YouTube Video Link:</label>
+            <input type="text" id="youtubeUrl" placeholder="Paste YouTube link (e.g., https://youtube.com/watch?v=... or https://youtu.be/...)" />
+            <small style="color: #999; display: block; margin-top: 5px;">
+                Paste the full link from your browser's address bar
+            </small>
+        </div>
+        
+        <button onclick="summarizeVideo()" style="margin-bottom: 10px;">📝 Summarize Video</button>
+        
+        <div id="resultSection" class="result-section" style="display: none;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h2 style="margin: 0;">Summary:</h2>
+                <span id="languageInfo" style="color: #667eea; font-size: 14px; font-weight: 600;"></span>
+            </div>
+            <textarea id="summary" readonly></textarea>
+            <div id="availableLangs" style="color: #999; font-size: 12px; margin-top: 8px;"></div>
+        </div>
+    </div>
+    
+    <script>
+        const API_URL = 'http://localhost:5000';
+        let timerInterval = null;
+        let elapsedSeconds = 0;
+        
+        function showStatus(message, type = 'info') {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = `status ${type}`;
+            setTimeout(() => {
+                if (type !== 'error') {
+                    statusEl.style.display = 'none';
+                }
+            }, 5000);
+        }
+        
+        function startLoadingAnimation() {
+            const loader = document.getElementById('loaderContainer');
+            loader.classList.add('active');
+            
+            // Reset timer
+            elapsedSeconds = 0;
+            updateTimer();
+            
+            // Reset steps
+            document.getElementById('step1').className = 'step active';
+            document.getElementById('step2').className = 'step';
+            document.getElementById('step3').className = 'step';
+            
+            // Start timer
+            timerInterval = setInterval(updateTimer, 1000);
+            
+            // Simulate step progression (rough estimates based on observed behavior)
+            setTimeout(() => {
+                document.getElementById('step1').classList.add('completed');
+                document.getElementById('step1').classList.remove('active');
+                document.getElementById('step2').classList.add('active');
+            }, 2000);
+            
+            setTimeout(() => {
+                document.getElementById('step2').classList.add('completed');
+                document.getElementById('step2').classList.remove('active');
+                document.getElementById('step3').classList.add('active');
+            }, 5000);
+        }
+        
+        function updateTimer() {
+            elapsedSeconds++;
+            const timer = document.getElementById('timer');
+            const minutes = Math.floor(elapsedSeconds / 60);
+            const seconds = elapsedSeconds % 60;
+            
+            if (minutes > 0) {
+                timer.textContent = `${minutes}m ${seconds}s`;
+            } else {
+                timer.textContent = `${seconds}s`;
+            }
+        }
+        
+        function stopLoadingAnimation() {
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+            
+            const loader = document.getElementById('loaderContainer');
+            loader.classList.remove('active');
+            
+            // Mark all steps as completed
+            document.getElementById('step1').classList.add('completed');
+            document.getElementById('step1').classList.remove('active');
+            document.getElementById('step2').classList.add('completed');
+            document.getElementById('step2').classList.remove('active');
+            document.getElementById('step3').classList.add('completed');
+            document.getElementById('step3').classList.remove('active');
+        }
+        
+        async function checkHealth() {
+            try {
+                showStatus('Checking server health...', 'loading');
+                const response = await fetch(`${API_URL}/health`);
+                const data = await response.json();
+                showStatus(`✅ Server is ${data.status}!`, 'success');
+            } catch (error) {
+                showStatus(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+        
+        async function getAPI() {
+            try {
+                const response = await fetch(`${API_URL}/`);
+                const data = await response.json();
+                let message = `API Status: ${data.status}\n\nEndpoints:\n`;
+                for (const [key, value] of Object.entries(data.endpoints)) {
+                    message += `${key}: ${value}\n`;
+                }
+                alert(message);
+            } catch (error) {
+                showStatus(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+        
+        async function summarizeVideo() {
+            const youtubeUrl = document.getElementById('youtubeUrl').value.trim();
+            const summarizeBtn = event.target;
+            
+            if (!youtubeUrl) {
+                showStatus('❌ Please enter a YouTube URL', 'error');
+                return;
+            }
+            
+            try {
+                // Disable button and show loading
+                summarizeBtn.disabled = true;
+                startLoadingAnimation();
+                
+                const startTime = Date.now();
+                const response = await fetch(`${API_URL}/summary?url=${encodeURIComponent(youtubeUrl)}`);
+                const data = await response.json();
+                const duration = (Date.now() - startTime) / 1000;
+                
+                stopLoadingAnimation();
+                summarizeBtn.disabled = false;
+                
+                if (data.error) {
+                    const errorMsg = data.data || 'Unknown error occurred';
+                    if (data.error_type === 'rate_limit') {
+                        showStatus(`⏱️ ${errorMsg}`, 'error');
+                    } else {
+                        showStatus(`❌ ${errorMsg}`, 'error');
+                    }
+                } else {
+                    showStatus(`✅ Summary generated successfully in ${duration.toFixed(2)}s!`, 'success');
+                    document.getElementById('summary').value = data.data;
+                    
+                    // Display language information
+                    const langInfo = document.getElementById('languageInfo');
+                    langInfo.textContent = `📝 ${data.language || 'Unknown Language'} • ${duration.toFixed(2)}s`;
+                    
+                    // Display available languages
+                    const availableLangs = document.getElementById('availableLangs');
+                    if (data.available_languages && data.available_languages.length > 0) {
+                        const langMap = {
+                            'en': '🇬🇧 English',
+                            'hi': '🇮🇳 Hindi',
+                            'es': '🇪🇸 Spanish',
+                            'fr': '🇫🇷 French',
+                            'de': '🇩🇪 German',
+                            'pt': '🇵🇹 Portuguese',
+                            'ru': '🇷🇺 Russian',
+                            'ja': '🇯🇵 Japanese',
+                            'zh': '🇨🇳 Chinese',
+                            'ar': '🇸🇦 Arabic',
+                        };
+                        const langs = data.available_languages.map(lang => langMap[lang] || lang).join(', ');
+                        availableLangs.textContent = `Available languages: ${langs}`;
+                    }
+                    
+                    document.getElementById('resultSection').style.display = 'block';
+                }
+            } catch (error) {
+                stopLoadingAnimation();
+                summarizeBtn.disabled = false;
+                showStatus(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+        
+        // Allow Enter key to summarize
+        document.getElementById('youtubeUrl').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !document.querySelector('button:disabled')) {
+                summarizeVideo();
+            }
+        });
+    </script>
+</body>
+</html>
