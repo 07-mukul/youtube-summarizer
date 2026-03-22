@@ -18,7 +18,11 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 # Simple cache for summaries: {video_id: {"summary": ..., "language": ..., timestamp: ...}}
 summary_cache = {}
-CACHE_DURATION = 3600  # Cache for 1 hour
+CACHE_DURATION = 86400  # Cache for 24 hours to avoid YouTube rate limiting
+
+# Request throttling - track last request time
+last_request_time = {}
+MIN_REQUEST_INTERVAL = 5  # Minimum 5 seconds between requests for same video
 
 @app.route('/', methods=['GET'])
 def home():
@@ -137,9 +141,15 @@ def youtube_summarizer():
         # Handle specific YouTube errors
         if "blocking" in error_msg.lower() or "ip blocked" in error_msg.lower():
             return jsonify({
-                "data": "YouTube is temporarily blocking requests due to too many API calls. Please try a different video or wait a few minutes.",
+                "data": "YouTube is blocking your IP due to too many requests. Solutions: 1) Wait 15-30 minutes, 2) Switch VPN server, 3) Try a different video. Cached results will be available immediately.",
                 "error": True,
-                "error_type": "rate_limit"
+                "error_type": "ip_blocking",
+                "solutions": [
+                    "Wait 15-30 minutes for YouTube to unblock your IP",
+                    "Switch to a different VPN server",
+                    "Try summarizing a different video",
+                    "Ensure VPN is properly connected"
+                ]
             }), 429
         elif "no transcripts" in error_msg.lower() or "transcripts disabled" in error_msg.lower():
             return jsonify({"data": "This video does not have subtitles available.", "error": True}), 404
@@ -177,87 +187,99 @@ def youtube_summarizer():
 #         raise e
 
 def get_transcript(video_id):
-    try:
-        # Create YouTubeTranscriptApi instance
-        yt_api = YouTubeTranscriptApi()
-        
-        # List all available transcripts
-        transcript_list = yt_api.list(video_id)
-        
-        # Get all available language codes
-        available_langs = set()
-        available_langs.update(transcript_list._generated_transcripts.keys())
-        available_langs.update(transcript_list._manually_created_transcripts.keys())
-        available_langs = list(available_langs)
-        
-        print(f"Available languages: {available_langs}")
-        
-        # Try English first
-        language_used = None
-        transcript_response = None
-        
-        # Check for English (en)
-        if any(lang.startswith('en') for lang in available_langs):
-            try:
-                transcript_response = yt_api.fetch(video_id, languages=['en'])
-                language_used = '🇬🇧 English'
-                print(f"Using English transcript")
-            except Exception as e:
-                print(f"Failed to fetch English: {e}")
-        
-        # Try Hindi (hi) if English not available
-        if transcript_response is None and any(lang.startswith('hi') for lang in available_langs):
-            try:
-                transcript_response = yt_api.fetch(video_id, languages=['hi'])
-                language_used = '🇮🇳 Hindi'
-                print(f"Using Hindi transcript")
-            except Exception as e:
-                print(f"Failed to fetch Hindi: {e}")
-        
-        # Try any available language as fallback
-        if transcript_response is None and available_langs:
-            try:
-                first_lang = available_langs[0]
-                transcript_response = yt_api.fetch(video_id, languages=[first_lang])
-                language_used = f'Language: {first_lang}'
-                print(f"Using {first_lang} transcript")
-            except Exception as e:
-                print(f"Failed to fetch {first_lang}: {e}")
-        
-        if transcript_response is None:
-            raise Exception(f"No transcripts available. Available languages: {available_langs}")
-        
-        # Extract text from FetchedTranscriptSnippet objects
-        transcript_text = ' '.join([snippet.text for snippet in transcript_response])
-        
-        return {
-            'text': transcript_text,
-            'language': language_used,
-            'available_languages': available_langs
-        }
-        
-    except InvalidVideoId as e:
-        print(f"Invalid video ID: {e}")
-        raise e
-    except IpBlocked as e:
-        print(f"IP Blocked by YouTube: {e}")
-        raise Exception("YouTube is temporarily blocking your IP due to too many requests. Please try again in a few minutes.")
-    except TranscriptsDisabled as e:
-        print(f"Transcripts disabled: {e}")
-        raise Exception("This video does not have transcripts available.")
-    except Exception as e:
-        print(f"Transcript fetch failed: {e}")
-        raise e
+    """Fetch transcript with minimal retry logic"""
+    max_retries = 2  # Reduced from 3 to 2
+    base_delay = 1  # Reduced from 2 to 1 second
+    
+    for attempt in range(max_retries):
+        try:
+            # Create YouTubeTranscriptApi instance
+            yt_api = YouTubeTranscriptApi()
+            
+            # List all available transcripts
+            transcript_list = yt_api.list(video_id)
+            
+            # Get all available language codes
+            available_langs = set()
+            available_langs.update(transcript_list._generated_transcripts.keys())
+            available_langs.update(transcript_list._manually_created_transcripts.keys())
+            available_langs = list(available_langs)
+            
+            print(f"Available languages: {available_langs}")
+            
+            # Try English first
+            language_used = None
+            transcript_response = None
+            
+            # Check for English (en)
+            if any(lang.startswith('en') for lang in available_langs):
+                try:
+                    transcript_response = yt_api.fetch(video_id, languages=['en'])
+                    language_used = '🇬🇧 English'
+                    print(f"Using English transcript")
+                except Exception as e:
+                    print(f"Failed to fetch English: {e}")
+            
+            # Try Hindi (hi) if English not available
+            if transcript_response is None and any(lang.startswith('hi') for lang in available_langs):
+                try:
+                    transcript_response = yt_api.fetch(video_id, languages=['hi'])
+                    language_used = '🇮🇳 Hindi'
+                    print(f"Using Hindi transcript")
+                except Exception as e:
+                    print(f"Failed to fetch Hindi: {e}")
+            
+            # Try any available language as fallback
+            if transcript_response is None and available_langs:
+                try:
+                    first_lang = available_langs[0]
+                    transcript_response = yt_api.fetch(video_id, languages=[first_lang])
+                    language_used = f'Language: {first_lang}'
+                    print(f"Using {first_lang} transcript")
+                except Exception as e:
+                    print(f"Failed to fetch {first_lang}: {e}")
+            
+            if transcript_response is None:
+                raise Exception(f"No transcripts available. Available languages: {available_langs}")
+            
+            # Extract text from FetchedTranscriptSnippet objects
+            transcript_text = ' '.join([snippet.text for snippet in transcript_response])
+            
+            # Success! Return the transcript
+            return {
+                'text': transcript_text,
+                'language': language_used,
+                'available_languages': available_langs
+            }
+            
+        except InvalidVideoId as e:
+            print(f"Invalid video ID: {e}")
+            raise e
+        except IpBlocked as e:
+            print(f"Attempt {attempt + 1}/{max_retries} - IP Blocked by YouTube: {e}")
+            if attempt < max_retries - 1:
+                # Exponential backoff: 2s, 4s, 8s
+                delay = base_delay * (2 ** attempt)
+                print(f"Retrying in {delay} seconds...")
+                time.sleep(delay)
+            else:
+                raise Exception("YouTube is blocking your IP. Please wait 15-30 minutes and try again, or use a different VPN server.")
+        except TranscriptsDisabled as e:
+            print(f"Transcripts disabled: {e}")
+            raise Exception("This video does not have transcripts available.")
+        except Exception as e:
+            print(f"Attempt {attempt + 1}/{max_retries} - Transcript fetch failed: {e}")
+            if attempt < max_retries - 1:
+                # Exponential backoff
+                delay = base_delay * (2 ** attempt)
+                print(f"Retrying in {delay} seconds...")
+                time.sleep(delay)
+            else:
+                raise e
 
 def generate_summary(transcript, language='English'):
-    # Try multiple models in order of preference (by rate limits)
-    # Using models with better rate limits to avoid throttling
-    models_to_try = [
-        "gemini-3.1-flash-lite",  # Best rate limits: 15 RPM, 250K TPM
-        "gemini-2.5-flash-lite",  # Good: 10 RPM, 250K TPM  
-        "gemini-3-flash",         # Good: 5 RPM, 250K TPM
-        "gemini-2.5-flash"        # Original: Currently throttled
-    ]
+    # Use the best working model (with request timeout)
+    model_name = "gemini-2.0-flash"  # Most reliable and fastest
     
     # Adjust prompt based on language
     if 'Hindi' in language:
@@ -265,25 +287,16 @@ def generate_summary(transcript, language='English'):
     else:
         prompt = f"You have to summarize a YouTube video using its transcript in 10 points. Transcript: {transcript}"
     
-    # Try each model
-    last_error = None
-    for model_name in models_to_try:
-        try:
-            print(f"Attempting to use model: {model_name}")
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            print(f"✅ Successfully used model: {model_name}")
-            return response.text
-        except Exception as e:
-            last_error = e
-            print(f"❌ Model {model_name} failed: {type(e).__name__}")
-            continue
-    
-    # If all models fail, raise the last error
-    if last_error:
-        raise last_error
-    else:
-        raise Exception("Unable to generate summary with any available model")
+    try:
+        print(f"Generating summary with model: {model_name}")
+        model = genai.GenerativeModel(model_name)
+        # Set timeout to 60 seconds to prevent infinite hanging
+        response = model.generate_content(prompt, request_options={"timeout": 60})
+        print(f"✅ Summary generated successfully")
+        return response.text
+    except Exception as e:
+        print(f"❌ Summary generation failed: {type(e).__name__}: {e}")
+        raise Exception(f"Unable to generate summary: {str(e)}")
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
