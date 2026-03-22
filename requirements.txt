@@ -4,3 +4,4 @@ youtube-transcript-api
 flask-cors
 python-dotenv
 gunicorn
+yt-dlp

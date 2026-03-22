@@ -12,6 +12,7 @@ from pathlib import Path
 import time
 import requests
 import http.cookiejar
+import yt_dlp
 
 try:
     import grpc
@@ -318,150 +319,99 @@ def _load_cookies(session):
         except Exception as e:
             print(f"[cookies] Warning: failed to load cookies.txt: {e}")
 
-def _direct_http_session():
-    s = requests.Session()
-    s.headers.update({"User-Agent": UA})
-    _load_cookies(s)
-    return s
-
-
-def _proxy_http_session():
-    """Return a requests Session using Webshare, or None if env is incomplete."""
+def get_transcript(video_id):
+    """Fetch transcript using yt-dlp to bypass YouTube's datacenter blocks."""
+    cookies_path = _BASE_DIR / "cookies.txt"
+    ydl_opts = {
+        'skip_download': True,
+        'writesubtitles': True,
+        'writeautomaticsub': True,
+        'subtitleslangs': ['en', 'hi', 'en-US', 'en-GB'],
+        'quiet': True,
+        'no_warnings': True,
+    }
+    
+    if cookies_path.exists():
+        ydl_opts['cookiefile'] = str(cookies_path)
+        
     host = os.getenv("WEBSHARE_PROXY_HOST")
     port = os.getenv("WEBSHARE_PROXY_PORT")
     user = os.getenv("WEBSHARE_PROXY_USERNAME")
     password = os.getenv("WEBSHARE_PROXY_PASSWORD")
-    if not all([host, port, user, password]):
-        return None
-    proxy_url = f"http://{user}:{password}@{host}:{port}"
+    if all([host, port, user, password]):
+        ydl_opts['proxy'] = f"http://{user}:{password}@{host}:{port}"
+        print("[yt-dlp] Using Webshare proxy")
+
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            print(f"[yt-dlp] Fetching info for {video_id}")
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        err = str(e)
+        if "Private video" in err or "Video unavailable" in err:
+            raise InvalidVideoId(video_id)
+        if "Sign in" in err or "bot" in err.lower() or "blocked" in err.lower():
+            raise IpBlocked(video_id)
+        raise Exception(f"Failed to fetch video details: {e}")
+        
+    subs = info.get('subtitles', {})
+    auto_subs = info.get('automatic_captions', {})
+    
+    if not subs and not auto_subs:
+        raise NoTranscriptFound(video_id)
+        
+    targets = []
+    for lang in ['en', 'en-US', 'en-GB', 'hi']:
+        if lang in subs:
+            targets.append((subs[lang], "English" if 'en' in lang else "Hindi"))
+        if lang in auto_subs:
+            targets.append((auto_subs[lang], "English (Auto)" if 'en' in lang else "Hindi (Auto)"))
+            
+    if not targets:
+        if subs:
+            lang = list(subs.keys())[0]
+            targets.append((subs[lang], f"Language: {lang}"))
+        elif auto_subs:
+            lang = list(auto_subs.keys())[0]
+            targets.append((auto_subs[lang], f"Language: {lang} (Auto)"))
+            
+    if not targets:
+        raise NoTranscriptFound(video_id)
+        
+    sub_list, language = targets[0]
+    json3_entry = next((s for s in sub_list if s.get('ext') == 'json3'), None)
+    if not json3_entry:
+        raise Exception("Subtitle format json3 is missing.")
+        
+    # Download the JSON3 URL natively
     s = requests.Session()
-    s.proxies.update({"http": proxy_url, "https": proxy_url})
     s.headers.update({"User-Agent": UA})
     _load_cookies(s)
-    return s
-
-
-def _fetch_transcript_with_session(video_id, session):
-    """Core transcript fetch; raises library errors or Exception for no transcript text."""
-    yt_api = YouTubeTranscriptApi(http_client=session)
-    transcript_list = yt_api.list(video_id)
-
-    available_langs = set()
-    available_langs.update(transcript_list._generated_transcripts.keys())
-    available_langs.update(transcript_list._manually_created_transcripts.keys())
-    available_langs = list(available_langs)
-
-    print(f"Available languages: {available_langs}")
-
-    language_used = None
-    transcript_response = None
-
-    if any(lang.startswith("en") for lang in available_langs):
-        try:
-            transcript_response = yt_api.fetch(video_id, languages=["en"])
-            language_used = "English"
-            print("[ok] Using English transcript")
-        except Exception as e:
-            print(f"Failed to fetch English: {e}")
-
-    if transcript_response is None and any(lang.startswith("hi") for lang in available_langs):
-        try:
-            transcript_response = yt_api.fetch(video_id, languages=["hi"])
-            language_used = "Hindi"
-            print("[ok] Using Hindi transcript")
-        except Exception as e:
-            print(f"Failed to fetch Hindi: {e}")
-
-    if transcript_response is None and available_langs:
-        try:
-            first_lang = available_langs[0]
-            transcript_response = yt_api.fetch(video_id, languages=[first_lang])
-            language_used = f"Language: {first_lang}"
-            print(f"[ok] Using {first_lang} transcript")
-        except Exception as e:
-            print(f"Failed to fetch {first_lang}: {e}")
-
-    if transcript_response is None:
-        raise Exception(f"No transcripts available. Available languages: {available_langs}")
-
-    transcript_text = " ".join([snippet.text for snippet in transcript_response])
-    print(f"[ok] Successfully fetched transcript with {len(transcript_text)} characters")
-
+    if all([host, port, user, password]):
+        proxy_url = f"http://{user}:{password}@{host}:{port}"
+        s.proxies.update({"http": proxy_url, "https": proxy_url})
+        
+    req = s.get(json3_entry['url'])
+    if req.status_code != 200:
+        raise Exception(f"Failed to download subtitles HTTP {req.status_code}")
+        
+    data = req.json()
+    text_parts = []
+    for event in data.get('events', []):
+        if 'segs' in event:
+            for seg in event['segs']:
+                text_parts.append(seg.get('utf8', ''))
+                
+    transcript_text = " ".join(text_parts).replace('\\n', ' ')
+    print(f"[yt-dlp] Successfully fetched transcript with len {len(transcript_text)}")
+    
     return {
         "text": transcript_text,
-        "language": language_used,
-        "available_languages": available_langs,
+        "language": language,
+        "available_languages": list(subs.keys()) + list(auto_subs.keys())
     }
-
-
-def _get_transcript_one_route(video_id, label, session, max_retries=2, base_delay=1):
-    """Try transcript fetch with retries on transient failures (e.g. IpBlocked)."""
-    last_error = None
-    for attempt in range(max_retries):
-        try:
-            print(f"[{label}] attempt {attempt + 1}/{max_retries}")
-            return _fetch_transcript_with_session(video_id, session)
-        except InvalidVideoId:
-            raise
-        except TranscriptsDisabled as e:
-            print(f"Transcripts disabled: {e}")
-            raise Exception("This video does not have transcripts available.") from e
-        except IpBlocked as e:
-            last_error = e
-            print(f"[{label}] IP blocked by YouTube: {e}")
-            if attempt < max_retries - 1:
-                delay = base_delay * (2 ** attempt)
-                print(f"Retrying in {delay} seconds...")
-                time.sleep(delay)
-            else:
-                break
-        except Exception as e:
-            last_error = e
-            print(f"[{label}] Transcript fetch failed: {e}")
-            if attempt < max_retries - 1:
-                delay = base_delay * (2 ** attempt)
-                print(f"Retrying in {delay} seconds...")
-                time.sleep(delay)
-            else:
-                break
-    if last_error is not None:
-        raise last_error
-    raise Exception("Transcript fetch failed")
-
-
-def get_transcript(video_id):
-    """Fetch transcript: try direct connection first, then Webshare proxy if configured."""
-    routes = [("direct", _direct_http_session())]
-    proxy_sess = _proxy_http_session()
-    if proxy_sess:
-        ph = os.getenv("WEBSHARE_PROXY_HOST")
-        pp = os.getenv("WEBSHARE_PROXY_PORT")
-        routes.append((f"proxy {ph}:{pp}", proxy_sess))
-
-    last_exc = None
-    for label, session in routes:
-        try:
-            return _get_transcript_one_route(video_id, label, session)
-        except InvalidVideoId:
-            raise
-        except IpBlocked as e:
-            last_exc = e
-            print(f"Route {label} failed with IpBlocked, trying next route if any...")
-            continue
-        except Exception as e:
-            err = str(e).lower()
-            if "blocking" in err or "ip blocked" in err or "429" in err:
-                last_exc = e
-                print(f"Route {label} failed ({e}), trying next route if any...")
-                continue
-            raise
-
-    if last_exc is not None:
-        raise Exception(
-            "YouTube is blocking transcript requests from this network. "
-            "Try: wait and retry, use a VPN/residential proxy (set Webshare env vars), or a different network."
-        ) from last_exc
-    raise Exception("Unable to fetch transcript.")
 
 def _collect_exception_chain(exc: BaseException | None) -> list[BaseException]:
     """Collect nested exceptions (__cause__, __context__); SDK often wraps gRPC / API errors."""
