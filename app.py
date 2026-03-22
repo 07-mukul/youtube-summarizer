@@ -101,7 +101,25 @@ def home():
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({"status": "active", "message": "Service is running"}), 200
+    cookies_path = _BASE_DIR / "cookies.txt"
+    cookies_count = 0
+    if cookies_path.exists():
+        try:
+            import http.cookiejar
+            cj = http.cookiejar.MozillaCookieJar(cookies_path)
+            cj.load(ignore_discard=True, ignore_expires=True)
+            cookies_count = len(cj)
+        except Exception:
+            pass
+
+    return jsonify({
+        "status": "active",
+        "message": "Service is running",
+        "env_var_set": bool(os.getenv("YOUTUBE_COOKIES")),
+        "cookies_file_exists": cookies_path.exists(),
+        "cookies_loaded": cookies_count > 0,
+        "cookies_count": cookies_count
+    }), 200
 
 
 @app.after_request
